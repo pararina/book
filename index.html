@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Chart.js DataLabels Plugin -->
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap');
+    body { font-family: 'Noto Sans JP', sans-serif; -webkit-font-smoothing: antialiased; }
+    
+    .fade-in { animation: fadeIn 0.3s ease-in-out; }
+    .slide-up { animation: slideUp 0.3s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+    /* Calendar Grid */
+    .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+    .calendar-day { min-height: 60px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 4px; border-radius: 8px; font-size: 0.75rem; border: 1px solid #f3f4f6; background-color: white; transition: all 0.2s; }
+    .calendar-day:active { transform: scale(0.95); }
+    .calendar-day.has-expense { background-color: #f0f9ff; border-color: #bae6fd; cursor: pointer; }
+    .calendar-day.today { border: 2px solid #6366f1; }
+    .day-num { font-weight: bold; margin-bottom: 2px; }
+    .day-total { font-size: 0.7rem; color: #0369a1; font-weight: bold; }
+  </style>
+</head>
+<body class="bg-gray-50 text-slate-800 pb-24 max-w-md mx-auto min-h-screen shadow-lg relative">
+
+  <!-- Loading Overlay -->
+  <div id="loading" class="fixed inset-0 bg-white/80 z-50 flex flex-col justify-center items-center backdrop-blur-sm" style="display:none;">
+    <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mb-2"></div>
+    <div class="text-sm text-indigo-600 font-bold">Loading...</div>
+  </div>
+
+  <!-- Header -->
+  <header class="bg-gradient-to-r from-indigo-500 to-purple-600 text-white px-4 pt-4 pb-4 sticky top-0 z-40 shadow-lg">
+    <div class="flex justify-between items-center mb-2">
+      <h1 class="text-lg font-bold flex items-center gap-2">
+        <i data-lucide="home" class="w-5 h-5"></i> 会計簿ツール
+      </h1>
+      <div class="flex gap-2">
+        <!-- New Header Add Button -->
+        <button onclick="triggerHaptic(); openAddModal(false)" class="p-2 bg-white/20 rounded-full hover:bg-white/30 transition active:scale-95" title="支出を追加">
+          <i data-lucide="plus" class="w-5 h-5"></i>
+        </button>
+        <button onclick="triggerHaptic(); loadData()" class="p-2 bg-white/20 rounded-full hover:bg-white/30 transition active:scale-95" title="データを更新">
+          <i data-lucide="refresh-cw" class="w-5 h-5"></i>
+        </button>
+        <button onclick="triggerHaptic(); cycleView()" class="p-2 bg-white/20 rounded-full hover:bg-white/30 transition active:scale-95">
+          <i id="viewIcon" data-lucide="layout-grid" class="w-5 h-5"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Month Navigator -->
+    <div class="bg-white/10 rounded-xl p-2 flex justify-between items-center backdrop-blur-sm">
+      <button onclick="triggerHaptic(); changeMonth(-1)" class="p-2 hover:bg-white/20 rounded-lg transition active:scale-95"><i data-lucide="chevron-left" class="w-5 h-5"></i></button>
+      
+      <button onclick="triggerHaptic(); openMonthPicker()" class="flex items-center gap-2 px-4 py-1 hover:bg-white/20 rounded-lg transition active:scale-95">
+        <span id="currentMonthDisplay" class="text-lg font-bold tracking-widest whitespace-nowrap">--年 --月度</span>
+        <i data-lucide="chevron-down" class="w-4 h-4 opacity-70"></i>
+      </button>
+      
+      <button onclick="triggerHaptic(); changeMonth(1)" class="p-2 hover:bg-white/20 rounded-lg transition active:scale-95"><i data-lucide="chevron-right" class="w-5 h-5"></i></button>
+    </div>
+    <div class="text-center text-[10px] text-white/80 mt-1">(前月26日 〜 今月25日)</div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="p-4 space-y-4">
+    
+    <!-- Settlement Card (Always Visible) -->
+    <div id="settlementCard" class="bg-white rounded-2xl shadow-sm p-5 pt-8 border border-gray-100 fade-in transition-colors duration-300 relative">
+      <button onclick="triggerHaptic(); toggleRatioSettings()" class="absolute top-4 right-4 p-2 text-gray-400 hover:text-indigo-500 transition z-10 bg-gray-50 rounded-full active:scale-95" title="負担割合の設定">
+        <i data-lucide="sliders" class="w-4 h-4"></i>
+      </button>
+
+      <div class="text-center mb-4">
+        <div class="text-gray-400 text-xs mb-1">今月の合計支出</div>
+        <div id="totalAmount" class="text-4xl font-bold text-slate-800">¥0</div>
+      </div>
+
+      <!-- Ratio Settings -->
+      <div id="ratioSettings" class="hidden mb-4 bg-gray-50 p-3 rounded-xl border border-gray-200 slide-up">
+        <div class="flex justify-between text-xs font-bold text-gray-500 mb-2">
+          <span>負担割合を設定</span>
+          <span id="ratioDisplay">60 : 40</span>
+        </div>
+        <input type="range" id="ratioSlider" min="0" max="100" step="5" value="60" oninput="updateRatio()" 
+          class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600">
+        <div class="flex justify-between text-xs mt-1">
+          <span class="text-teal-600 font-bold">ぱら <span id="paraRatioVal">60</span>%</span>
+          <span class="text-red-500 font-bold">りな <span id="rinaRatioVal">40</span>%</span>
+        </div>
+      </div>
+
+      <!-- Payment Summary -->
+      <div class="grid grid-cols-2 gap-3 mb-4">
+        <div class="bg-teal-50 p-3 rounded-xl text-center border border-teal-100">
+          <div class="text-xs text-teal-600 font-bold mb-1">ぱら支払</div>
+          <div id="paraPaid" class="text-lg font-semibold text-slate-700">¥0</div>
+        </div>
+        <div class="bg-red-50 p-3 rounded-xl text-center border border-red-100">
+          <div class="text-xs text-red-500 font-bold mb-1">りな支払</div>
+          <div id="rinaPaid" class="text-lg font-semibold text-slate-700">¥0</div>
+        </div>
+      </div>
+
+      <!-- Settlement Result -->
+      <div class="bg-slate-800 text-white p-4 rounded-xl text-center shadow-lg transition-colors duration-300" id="settlementResultBox">
+        <div class="text-xs text-slate-400 mb-1">現在の清算状況 (千円未満切捨)</div>
+        <div id="settlementMessage" class="text-lg font-bold mb-2">計算中...</div>
+        <button onclick="toggleSettlementStatus()" id="settleButton" class="w-full py-2 px-4 rounded-lg text-sm font-bold border border-white/20 hover:bg-white/10 transition flex items-center justify-center gap-2 active:scale-95">
+          <div class="w-4 h-4 border-2 border-white rounded-sm flex items-center justify-center">
+            <i data-lucide="check" class="w-3 h-3 opacity-0 transition" id="settleCheckIcon"></i>
+          </div>
+          <span id="settleButtonText">今月の清算を完了にする</span>
+        </button>
+        <div id="rawBalanceMessage" class="text-[10px] text-gray-500 mt-2 text-right opacity-0"></div>
+      </div>
+    </div>
+
+    <!-- Dashboard View -->
+    <div id="dashboardView" class="space-y-4 fade-in">
+      <div class="bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
+        <h3 class="font-bold text-gray-700 mb-2 flex items-center gap-2"><i data-lucide="pie-chart" class="w-4 h-4"></i> 支払内訳</h3>
+        <div class="h-64 relative">
+          <canvas id="payerChart"></canvas>
+        </div>
+      </div>
+      
+      <!-- Category Chart with Rent Toggle -->
+      <div class="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 relative overflow-hidden group">
+        <div class="flex justify-between items-center mb-2">
+          <h3 class="font-bold text-gray-700 flex items-center gap-2"><i data-lucide="shopping-cart" class="w-4 h-4"></i> 科目別</h3>
+          <!-- Toggle Badge -->
+          <div id="rentToggleBadge" class="text-[10px] px-2 py-1 rounded-full bg-gray-100 text-gray-500 font-bold border border-gray-200 transition-colors">
+            家賃込み
+          </div>
+        </div>
+        
+        <!-- Clickable Area for Toggle -->
+        <div class="h-64 relative cursor-pointer active:scale-[0.98] transition-transform" onclick="triggerHaptic(); toggleRentInclusion()" title="タップして家賃の表示を切り替え">
+          <canvas id="categoryChart"></canvas>
+          <div class="absolute bottom-2 right-2 text-[10px] text-gray-400 bg-white/80 px-2 py-1 rounded-full pointer-events-none">
+            <i data-lucide="mouse-pointer-2" class="w-3 h-3 inline mr-1"></i>タップで切替
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- List View -->
+    <div id="listView" class="hidden bg-white rounded-2xl shadow-sm overflow-hidden pb-4 fade-in border border-gray-100">
+      <div id="transactionsList" class="divide-y divide-gray-100">
+        <!-- JSで挿入 -->
+      </div>
+    </div>
+
+    <!-- Calendar View -->
+    <div id="calendarView" class="hidden bg-white rounded-2xl shadow-sm p-4 fade-in border border-gray-100">
+      <h3 class="font-bold text-gray-700 mb-4 flex items-center gap-2"><i data-lucide="calendar" class="w-4 h-4"></i> 日別サマリー</h3>
+      
+      <div class="grid grid-cols-7 gap-1 text-center text-xs text-gray-400 font-bold mb-2">
+        <span class="text-red-400">日</span><span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span class="text-indigo-400">土</span>
+      </div>
+      <div id="calendarGrid" class="calendar-grid">
+        <!-- JSで生成 -->
+      </div>
+      <div class="text-[10px] text-gray-400 mt-4 text-right">
+        ※ 26日〜翌25日の期間を表示
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Floating Add Button (Still useful for one-handed use) -->
+  <button onclick="triggerHaptic(); openAddModal(false)" class="fixed bottom-6 right-6 bg-indigo-600 text-white p-4 rounded-full shadow-xl hover:bg-indigo-700 transition active:scale-95 z-30">
+    <i data-lucide="plus" class="w-8 h-8"></i>
+  </button>
+
+  <!-- Day Detail Modal -->
+  <div id="dayDetailModal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center hidden backdrop-blur-sm">
+    <div class="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl relative slide-up m-4 max-h-[85vh] flex flex-col">
+      <button onclick="triggerHaptic(); closeDayDetail()" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 active:scale-95 transition">
+        <i data-lucide="x" class="w-6 h-6"></i>
+      </button>
+      <h3 id="dayDetailTitle" class="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+        <i data-lucide="calendar" class="w-5 h-5 text-indigo-500"></i>
+        <span></span>
+      </h3>
+      <div id="dayDetailList" class="overflow-y-auto flex-1 space-y-2 -mx-2 px-2 pb-2">
+        <!-- Content goes here -->
+      </div>
+      <div class="mt-4 pt-4 border-t border-gray-100 text-center">
+        <button onclick="triggerHaptic(); openAddModalWithDate()" class="text-indigo-600 font-bold text-sm flex items-center justify-center gap-1 active:scale-95 transition bg-indigo-50 py-2 px-4 rounded-lg w-full">
+          <i data-lucide="plus" class="w-4 h-4"></i> この日に支出を追加
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add/Copy/Edit Modal -->
+  <div id="addModal" class="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center hidden backdrop-blur-sm">
+    <!-- Added max-h and overflow-y-auto to fix scrolling within modal -->
+    <div class="bg-white w-full max-w-md rounded-t-2xl sm:rounded-2xl p-6 slide-up shadow-2xl max-h-[85vh] overflow-y-auto">
+      <h2 id="modalTitle" class="text-xl font-bold mb-4 text-center text-slate-800">📝 支出を登録</h2>
+      <form id="addForm" onsubmit="submitForm(event)">
+        <div class="space-y-4">
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-bold text-gray-500 mb-1">日付</label>
+              <input type="date" name="date" id="inputDate" required class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 focus:ring-2 focus:ring-indigo-500 outline-none">
+            </div>
+            <div>
+              <label class="block text-xs font-bold text-gray-500 mb-1">支払者</label>
+              <div class="flex bg-gray-100 rounded-lg p-1">
+                <input type="radio" name="payer" value="ぱら" id="payerPara" class="hidden" checked onchange="updatePayerStyle()">
+                <label for="payerPara" id="labelPara" class="flex-1 text-center text-sm py-1.5 rounded-md cursor-pointer transition font-bold bg-white shadow text-teal-600 active:scale-95">ぱら</label>
+                
+                <input type="radio" name="payer" value="りな" id="payerRina" class="hidden" onchange="updatePayerStyle()">
+                <label for="payerRina" id="labelRina" class="flex-1 text-center text-sm py-1.5 rounded-md cursor-pointer transition text-gray-500 active:scale-95">りな</label>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-bold text-gray-500 mb-1">科目</label>
+            <div class="grid grid-cols-3 gap-2" id="categoryGrid"></div>
+            <input type="hidden" name="category" id="inputCategory" value="食事">
+          </div>
+
+          <div>
+            <label class="block text-xs font-bold text-gray-500 mb-1">金額</label>
+            <div class="relative">
+              <span class="absolute left-3 top-2.5 text-gray-400">¥</span>
+              <input type="number" name="amount" id="inputAmount" placeholder="0" required inputmode="numeric" class="w-full pl-8 bg-gray-50 border border-gray-200 rounded-lg p-2 text-lg font-bold focus:ring-2 focus:ring-indigo-500 outline-none">
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-bold text-gray-500 mb-1">メモ (任意)</label>
+            <input type="text" name="memo" id="inputMemo" placeholder="何を買った？" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 focus:ring-2 focus:ring-indigo-500 outline-none">
+          </div>
+
+          <div class="pt-2 flex gap-3">
+            <button type="button" onclick="closeAddModal()" class="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition active:scale-95">キャンセル</button>
+            <button type="submit" id="modalSubmitBtn" class="flex-1 py-3 bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-bold rounded-xl shadow-lg hover:opacity-90 flex items-center justify-center gap-2 transition-transform duration-75 active:scale-95">
+              <span>登録する</span>
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Month Picker Modal -->
+  <div id="monthPickerModal" class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 hidden backdrop-blur-sm">
+    <div class="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl relative slide-up">
+      <button onclick="closeMonthPicker()" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 active:scale-95 transition">
+        <i data-lucide="x" class="w-6 h-6"></i>
+      </button>
+      
+      <div class="flex justify-between items-center mb-6 px-4">
+        <button onclick="triggerHaptic(); changePickerYear(-1)" class="p-2 hover:bg-gray-100 rounded-full active:scale-95 transition"><i data-lucide="arrow-left" class="w-5 h-5 text-gray-600"></i></button>
+        <span id="pickerYearDisplay" class="text-xl font-bold text-slate-800">2023年</span>
+        <button onclick="triggerHaptic(); changePickerYear(1)" class="p-2 hover:bg-gray-100 rounded-full active:scale-95 transition"><i data-lucide="arrow-right" class="w-5 h-5 text-gray-600"></i></button>
+      </div>
+      <div class="grid grid-cols-4 gap-3" id="monthGrid"></div>
+    </div>
+  </div>
+
+  <script>
+    // ▼▼▼ 追加：API通信用の設定 ▼▼▼
+    const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyMbO-QxSFtgj_eyU3gTMgBaqNqDBgo4P2mp4qr_7JJyaDPGO1bt5m63CFyykuap82i/exec';
+
+    async function apiCall(action, data = {}) {
+      const requestData = { action: action, ...data };
+      try {
+        const response = await fetch(GAS_WEB_APP_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(requestData)
+        });
+        if (!response.ok) throw new Error('通信エラーが発生しました');
+        
+        const result = await response.json();
+        let finalData = result;
+        if (typeof result === 'string') {
+          try { finalData = JSON.parse(result); } catch(e) {}
+        }
+        if (finalData && finalData.error) throw new Error(finalData.error);
+        return finalData;
+      } catch (error) {
+        console.error('API Call Error:', error);
+        throw error;
+      }
+    }
+    // ▲▲▲ 追加ここまで ▲▲▲
+
+    const CATEGORIES = [
+      { id: '食事', color: '#FFB74D', icon: 'coffee' },
+      { id: '食料品', color: '#4DB6AC', icon: 'shopping-cart' },
+      { id: '日用品', color: '#81C784', icon: 'shopping-bag' },
+      { id: '家賃', color: '#FF8A65', icon: 'home' },
+      { id: '水道光熱費', color: '#64B5F6', icon: 'zap' },
+      { id: '通信費', color: '#4DD0E1', icon: 'wifi' },
+      { id: '旅費交通費', color: '#7986CB', icon: 'train' },
+      { id: '交際費', color: '#BA68C8', icon: 'gift' },
+      { id: 'その他', color: '#E0E0E0', icon: 'more-horizontal' }
+    ];
+    
+    let currentTransactions = [];
+    let isCurrentMonthSettled = false;
+    let viewMode = 'dashboard';
+    let paraRatio = 60; 
+    let currentAccountingMonth = getAccountingMonthStr(new Date()); 
+    let pickerYear = new Date().getFullYear();
+    let payerChart = null;
+    let categoryChart = null;
+    let editingId = null;
+    let isRentIncluded = true; // State for chart toggle
+    let selectedDateForDetail = null; // For day detail view
+
+    document.addEventListener('DOMContentLoaded', () => {
+      lucide.createIcons();
+      initDateInput();
+      initCategoryButtons();
+      updateMonthDisplay();
+      loadData();
+    });
+
+    function triggerHaptic() {
+      if (navigator.vibrate) {
+        navigator.vibrate(50);
+      }
+    }
+
+    function getAccountingMonthStr(date) {
+      const d = new Date(date);
+      if (d.getDate() >= 26) d.setMonth(d.getMonth() + 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }
+
+    function initDateInput() {
+      const today = new Date().toISOString().split('T')[0];
+      document.getElementById('inputDate').value = today;
+    }
+
+    function initCategoryButtons() {
+      const grid = document.getElementById('categoryGrid');
+      grid.innerHTML = CATEGORIES.map(cat => `
+        <button type="button" onclick="triggerHaptic(); selectCategory('${cat.id}')" id="btn-${cat.id}"
+          class="text-xs p-2 rounded-lg border flex flex-col items-center justify-center gap-1 transition bg-white border-gray-100 text-gray-500 hover:bg-gray-50 active:scale-95">
+          <i data-lucide="${cat.icon}" class="w-4 h-4" style="color:${cat.color}"></i>
+          ${cat.id}
+        </button>
+      `).join('');
+      selectCategory('食事');
+      lucide.createIcons();
+    }
+
+    function selectCategory(id) {
+      document.getElementById('inputCategory').value = id;
+      CATEGORIES.forEach(cat => {
+        const btn = document.getElementById(`btn-${cat.id}`);
+        if (cat.id === id) {
+          btn.className = `text-xs p-2 rounded-lg border flex flex-col items-center justify-center gap-1 transition bg-indigo-50 border-indigo-200 text-indigo-700 font-bold active:scale-95`;
+        } else {
+          btn.className = `text-xs p-2 rounded-lg border flex flex-col items-center justify-center gap-1 transition bg-white border-gray-100 text-gray-500 hover:bg-gray-50 active:scale-95`;
+        }
+      });
+    }
+
+    function showLoading(show) {
+      document.getElementById('loading').style.display = show ? 'flex' : 'none';
+    }
+
+    function cycleView() {
+      // Cycle: dashboard -> list -> calendar -> dashboard
+      const views = ['dashboard', 'list', 'calendar'];
+      const currentIdx = views.indexOf(viewMode);
+      const nextIdx = (currentIdx + 1) % views.length;
+      viewMode = views[nextIdx];
+      
+      document.getElementById('dashboardView').classList.add('hidden');
+      document.getElementById('listView').classList.add('hidden');
+      document.getElementById('calendarView').classList.add('hidden');
+      
+      const icon = document.getElementById('viewIcon');
+      
+      if (viewMode === 'dashboard') {
+        document.getElementById('dashboardView').classList.remove('hidden');
+        icon.setAttribute('data-lucide', 'layout-grid'); // Show grid icon for dashboard
+      } else if (viewMode === 'list') {
+        document.getElementById('listView').classList.remove('hidden');
+        icon.setAttribute('data-lucide', 'list');
+      } else {
+        document.getElementById('calendarView').classList.remove('hidden');
+        renderCalendar();
+        icon.setAttribute('data-lucide', 'calendar');
+      }
+      lucide.createIcons();
+    }
+    
+    // For backward compatibility if needed, but cycleView replaces toggleView
+    function toggleView() { cycleView(); }
+
+    function openAddModal(isEdit = false) {
+      if (!document.getElementById('addModal').classList.contains('hidden')) return;
+      document.getElementById('addModal').classList.remove('hidden');
+      
+      // Lock body scroll
+      document.body.classList.add('overflow-hidden');
+      
+      const title = document.getElementById('modalTitle');
+      const btn = document.getElementById('modalSubmitBtn');
+      if (isEdit) {
+        title.innerText = '📝 支出を編集';
+        btn.querySelector('span').innerText = '更新する';
+        btn.classList.remove('from-indigo-500', 'to-purple-600');
+        btn.classList.add('from-teal-500', 'to-emerald-600'); 
+      } else {
+        title.innerText = '📝 支出を登録';
+        btn.querySelector('span').innerText = '登録する';
+        btn.classList.add('from-indigo-500', 'to-purple-600');
+        btn.classList.remove('from-teal-500', 'to-emerald-600');
+        editingId = null;
+        
+        // 新規登録時は「ぱら」をデフォルトに設定し、見た目も更新する
+        document.getElementById('payerPara').checked = true;
+        updatePayerStyle();
+      }
+    }
+    
+    function closeAddModal() {
+      document.getElementById('addModal').classList.add('hidden');
+      // Unlock body scroll
+      document.body.classList.remove('overflow-hidden');
+      
+      const btn = document.getElementById('modalSubmitBtn');
+      btn.disabled = false;
+      btn.classList.remove('opacity-70', 'cursor-not-allowed');
+      
+      setTimeout(() => {
+        document.getElementById('addForm').reset();
+        initDateInput();
+        selectCategory('食事');
+        
+        // フォームリセット時にも「ぱら」をデフォルトにし、見た目を更新
+        document.getElementById('payerPara').checked = true;
+        updatePayerStyle();
+        
+        editingId = null; 
+      }, 300);
+    }
+
+    function openAddModalWithDate() {
+      if (selectedDateForDetail) {
+        document.getElementById('inputDate').value = selectedDateForDetail;
+      }
+      closeDayDetail();
+      openAddModal(false);
+    }
+
+    function copyItem(id) {
+      const item = currentTransactions.find(t => t.id === id);
+      if (!item) return;
+      
+      // If called from detail modal, close it
+      closeDayDetail();
+
+      editingId = null;
+      document.getElementById('inputDate').value = item.date;
+      document.getElementById('inputAmount').value = item.amount;
+      document.getElementById('inputMemo').value = item.memo;
+      selectCategory(item.category);
+      if (item.payer === 'ぱら') document.getElementById('payerPara').checked = true;
+      else document.getElementById('payerRina').checked = true;
+      updatePayerStyle();
+      
+      openAddModal(false);
+    }
+    
+    function editItem(id) {
+      const item = currentTransactions.find(t => t.id === id);
+      if (!item) return;
+      
+      // If called from detail modal, close it
+      closeDayDetail();
+
+      editingId = id;
+      document.getElementById('inputDate').value = item.date;
+      document.getElementById('inputAmount').value = item.amount;
+      document.getElementById('inputMemo').value = item.memo;
+      selectCategory(item.category);
+      if (item.payer === 'ぱら') document.getElementById('payerPara').checked = true;
+      else document.getElementById('payerRina').checked = true;
+      updatePayerStyle();
+      
+      openAddModal(true);
+    }
+
+    // Day Detail Modal Functions
+    function openDayDetail(dateStr) {
+      selectedDateForDetail = dateStr;
+      
+      // Lock body scroll
+      document.body.classList.add('overflow-hidden');
+      
+      const transactions = currentTransactions.filter(t => t.date === dateStr);
+      const title = document.getElementById('dayDetailTitle');
+      const list = document.getElementById('dayDetailList');
+      
+      // Format date for title
+      const [y, m, d] = dateStr.split('-');
+      title.querySelector('span').innerText = `${parseInt(m)}月${parseInt(d)}日の内訳`;
+      
+      if (transactions.length === 0) {
+        list.innerHTML = `<div class="text-center py-8 text-gray-400 text-sm">記録はありません</div>`;
+      } else {
+        list.innerHTML = transactions.map(t => {
+          const cat = CATEGORIES.find(c => c.id === t.category) || CATEGORIES[0];
+          const isPara = t.payer === 'ぱら';
+          return `
+            <div class="p-3 bg-gray-50 rounded-xl border border-gray-100 flex items-center justify-between">
+               <div class="flex items-center gap-3">
+                 <div class="p-2 rounded-full text-white shrink-0 shadow-sm" style="background-color: ${cat.color}">
+                   <i data-lucide="${cat.icon}" class="w-4 h-4"></i>
+                 </div>
+                 <div>
+                   <div class="font-bold text-slate-700 text-sm">${t.memo || t.category}</div>
+                   <div class="text-[10px] text-gray-400 flex items-center gap-1">
+                     <span class="${isPara ? 'text-teal-500' : 'text-red-500'} font-bold">${t.payer}</span>
+                   </div>
+                 </div>
+               </div>
+               <div class="flex items-center gap-2">
+                 <div class="font-bold text-slate-800 text-sm">¥${Number(t.amount).toLocaleString()}</div>
+                 <div class="flex gap-1 ml-1">
+                   <button onclick="editItem('${t.id}')" class="p-1.5 text-gray-400 hover:text-teal-500 bg-white rounded-lg border border-gray-100 shadow-sm transition active:scale-95">
+                     <i data-lucide="pencil" class="w-3 h-3"></i>
+                   </button>
+                   <button onclick="deleteItem('${t.id}')" class="p-1.5 text-gray-400 hover:text-red-500 bg-white rounded-lg border border-gray-100 shadow-sm transition active:scale-95">
+                     <i data-lucide="trash-2" class="w-3 h-3"></i>
+                   </button>
+                 </div>
+               </div>
+             </div>
+          `;
+        }).join('');
+      }
+      
+      lucide.createIcons();
+      document.getElementById('dayDetailModal').classList.remove('hidden');
+    }
+
+    function closeDayDetail() {
+      document.getElementById('dayDetailModal').classList.add('hidden');
+      // Unlock body scroll
+      document.body.classList.remove('overflow-hidden');
+    }
+
+    function updatePayerStyle() {
+      const isPara = document.getElementById('payerPara').checked;
+      const lPara = document.getElementById('labelPara');
+      const lRina = document.getElementById('labelRina');
+      
+      if (isPara) {
+        lPara.className = "flex-1 text-center text-sm py-1.5 rounded-md cursor-pointer transition font-bold bg-white shadow text-teal-600 active:scale-95";
+        lRina.className = "flex-1 text-center text-sm py-1.5 rounded-md cursor-pointer transition text-gray-500 hover:bg-gray-200 active:scale-95";
+      } else {
+        lPara.className = "flex-1 text-center text-sm py-1.5 rounded-md cursor-pointer transition text-gray-500 hover:bg-gray-200 active:scale-95";
+        lRina.className = "flex-1 text-center text-sm py-1.5 rounded-md cursor-pointer transition font-bold bg-white shadow text-red-500 active:scale-95";
+      }
+    }
+
+    function toggleRatioSettings() {
+      document.getElementById('ratioSettings').classList.toggle('hidden');
+    }
+
+    function toggleRentInclusion() {
+      isRentIncluded = !isRentIncluded;
+      const badge = document.getElementById('rentToggleBadge');
+      if (isRentIncluded) {
+        badge.innerText = "家賃込み";
+        badge.classList.remove('bg-teal-100', 'text-teal-700', 'border-teal-200');
+        badge.classList.add('bg-gray-100', 'text-gray-500', 'border-gray-200');
+      } else {
+        badge.innerText = "家賃抜き";
+        badge.classList.remove('bg-gray-100', 'text-gray-500', 'border-gray-200');
+        badge.classList.add('bg-teal-100', 'text-teal-700', 'border-teal-200');
+      }
+      calculateSummary(); // Re-render charts
+    }
+
+    function updateRatio() {
+      paraRatio = parseInt(document.getElementById('ratioSlider').value);
+      document.getElementById('ratioDisplay').innerText = `${paraRatio} : ${100 - paraRatio}`;
+      document.getElementById('paraRatioVal').innerText = paraRatio;
+      document.getElementById('rinaRatioVal').innerText = 100 - paraRatio;
+      calculateSummary();
+    }
+
+    function updateMonthDisplay() {
+      const [year, month] = currentAccountingMonth.split('-');
+      document.getElementById('currentMonthDisplay').innerText = `${year}年 ${parseInt(month)}月度`;
+    }
+
+    function changeMonth(delta) {
+      const [year, month] = currentAccountingMonth.split('-').map(Number);
+      const d = new Date(year, month - 1 + delta, 1);
+      currentAccountingMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      updateMonthDisplay();
+      loadData();
+    }
+
+    function openMonthPicker() {
+      pickerYear = parseInt(currentAccountingMonth.split('-')[0]);
+      renderPickerGrid();
+      document.getElementById('monthPickerModal').classList.remove('hidden');
+    }
+    function closeMonthPicker() {
+      document.getElementById('monthPickerModal').classList.add('hidden');
+    }
+    function changePickerYear(delta) {
+      pickerYear += delta;
+      renderPickerGrid();
+    }
+    function renderPickerGrid() {
+      document.getElementById('pickerYearDisplay').innerText = `${pickerYear}年`;
+      const grid = document.getElementById('monthGrid');
+      const currentM = parseInt(currentAccountingMonth.split('-')[1]);
+      const currentY = parseInt(currentAccountingMonth.split('-')[0]);
+
+      let html = '';
+      for (let m = 1; m <= 12; m++) {
+        const isCurrent = (pickerYear === currentY && m === currentM);
+        const bgClass = isCurrent ? 'bg-indigo-600 text-white shadow-lg transform scale-105' : 'bg-gray-50 text-gray-600 hover:bg-gray-100';
+        html += `<button onclick="triggerHaptic(); selectMonth(${m})" class="py-3 rounded-xl text-sm font-bold transition ${bgClass} active:scale-95">${m}月</button>`;
+      }
+      grid.innerHTML = html;
+    }
+    function selectMonth(m) {
+      currentAccountingMonth = `${pickerYear}-${String(m).padStart(2, '0')}`;
+      updateMonthDisplay();
+      closeMonthPicker();
+      loadData();
+    }
+
+    function loadData() {
+      showLoading(true);
+      apiCall('getDataByMonth', { monthStr: currentAccountingMonth })
+        .then((data) => {
+          currentTransactions = data.transactions;
+          isCurrentMonthSettled = data.isSettled;
+          calculateSummary();
+          renderList();
+          renderCalendar();
+          updateSettlementUI();
+          showLoading(false);
+        })
+        .catch((err) => {
+          alert('データ取得エラー: ' + err.message);
+          showLoading(false);
+        });
+    }
+
+    function submitForm(e) {
+      e.preventDefault();
+      triggerHaptic();
+      
+      const btn = document.getElementById('modalSubmitBtn');
+      const btnText = btn.querySelector('span');
+      const originalText = btnText.innerText;
+      btn.disabled = true;
+      btn.classList.add('opacity-70', 'cursor-not-allowed');
+      btnText.innerText = '処理中...';
+      
+      if (!btn.querySelector('.loader-icon')) {
+        const spinner = document.createElement('i');
+        spinner.dataset.lucide = "loader-2";
+        spinner.className = "w-4 h-4 animate-spin loader-icon";
+        btn.insertBefore(spinner, btnText);
+        lucide.createIcons();
+      }
+
+      const formData = {
+        id: editingId,
+        date: document.getElementById('inputDate').value,
+        payer: document.querySelector('input[name="payer"]:checked').value,
+        category: document.getElementById('inputCategory').value,
+        amount: e.target.amount.value,
+        memo: e.target.memo.value
+      };
+      
+      const successHandler = () => {
+        closeAddModal();
+        loadData();
+        btn.querySelector('.loader-icon')?.remove();
+        btnText.innerText = originalText;
+      };
+      
+      const errorHandler = (err) => {
+        alert('エラーが発生しました: ' + err);
+        btn.disabled = false;
+        btn.classList.remove('opacity-70', 'cursor-not-allowed');
+        btn.querySelector('.loader-icon')?.remove();
+        btnText.innerText = originalText;
+      };
+      
+      const action = editingId ? 'updateData' : 'saveData';
+      apiCall(action, { payload: formData })
+        .then(successHandler)
+        .catch(errorHandler);
+    }
+
+    function deleteItem(id) {
+      if (!confirm('この記録を削除しますか？')) return;
+      triggerHaptic();
+      closeDayDetail();
+      showLoading(true);
+      apiCall('deleteData', { id: id })
+        .then(() => loadData())
+        .catch(err => { alert('削除エラー: ' + err.message); showLoading(false); });
+    }
+    
+    function toggleSettlementStatus() {
+      triggerHaptic();
+      if(!confirm(isCurrentMonthSettled ? '清算完了ステータスを取り消しますか？' : '今月の清算を完了にしますか？')) return;
+      showLoading(true);
+      apiCall('toggleSettlement', { monthStr: currentAccountingMonth })
+        .then((res) => {
+          isCurrentMonthSettled = res.isSettled;
+          updateSettlementUI();
+          showLoading(false);
+        })
+        .catch(err => {
+          alert('エラー: ' + err.message);
+          showLoading(false);
+        });
+    }
+    
+    function updateSettlementUI() {
+      const box = document.getElementById('settlementResultBox');
+      const btn = document.getElementById('settleButton');
+      const icon = document.getElementById('settleCheckIcon');
+      const text = document.getElementById('settleButtonText');
+      
+      if (isCurrentMonthSettled) {
+        box.classList.remove('bg-slate-800');
+        box.classList.add('bg-green-600');
+        btn.classList.add('bg-white/20');
+        icon.classList.remove('opacity-0');
+        text.innerText = "清算済み (解除)";
+      } else {
+        box.classList.add('bg-slate-800');
+        box.classList.remove('bg-green-600');
+        btn.classList.remove('bg-white/20');
+        icon.classList.add('opacity-0');
+        text.innerText = "今月の清算を完了にする";
+      }
+    }
+
+    function calculateSummary() {
+      let total = 0, paraPaid = 0, rinaPaid = 0;
+      const catTotals = {};
+
+      currentTransactions.forEach(t => {
+        const amt = Number(t.amount);
+        total += amt;
+        if (t.payer === 'ぱら') paraPaid += amt;
+        else rinaPaid += amt;
+        
+        // Filter logic for chart
+        if (isRentIncluded || t.category !== '家賃') {
+          catTotals[t.category] = (catTotals[t.category] || 0) + amt;
+        }
+      });
+
+      document.getElementById('totalAmount').innerText = `¥${total.toLocaleString()}`;
+      document.getElementById('paraPaid').innerText = `¥${paraPaid.toLocaleString()}`;
+      document.getElementById('rinaPaid').innerText = `¥${rinaPaid.toLocaleString()}`;
+
+      const paraShouldPay = Math.round(total * (paraRatio / 100));
+      const rawBalance = paraPaid - paraShouldPay; 
+      const absRaw = Math.abs(rawBalance);
+      const paymentAmount = Math.floor(absRaw / 1000) * 1000;
+      
+      const msgEl = document.getElementById('settlementMessage');
+      const rawMsgEl = document.getElementById('rawBalanceMessage');
+
+      if (paymentAmount === 0) {
+        msgEl.innerHTML = `清算なし ✅`;
+      } else if (rawBalance > 0) {
+        msgEl.innerHTML = `りな <i data-lucide="arrow-right" class="inline w-4 h-4"></i> ぱら : <span class="text-yellow-400">¥${paymentAmount.toLocaleString()}</span>`;
+      } else {
+        msgEl.innerHTML = `ぱら <i data-lucide="arrow-right" class="inline w-4 h-4"></i> りな : <span class="text-yellow-400">¥${paymentAmount.toLocaleString()}</span>`;
+      }
+      
+      if(absRaw > 0) {
+        rawMsgEl.innerText = `(実数: ${rawBalance > 0 ? 'りな→ぱら' : 'ぱら→りな'} ¥${absRaw.toLocaleString()})`;
+        rawMsgEl.classList.remove('opacity-0');
+      } else {
+        rawMsgEl.classList.add('opacity-0');
+      }
+      lucide.createIcons();
+      updateCharts(paraPaid, rinaPaid, catTotals);
+    }
+
+    function renderList() {
+      const listEl = document.getElementById('transactionsList');
+      if (currentTransactions.length === 0) {
+        listEl.innerHTML = '<div class="text-center py-10 text-gray-400">今月の記録はまだありません</div>';
+        return;
+      }
+      
+      listEl.innerHTML = currentTransactions.map(t => {
+        const cat = CATEGORIES.find(c => c.id === t.category) || CATEGORIES[0];
+        const isPara = t.payer === 'ぱら';
+        return `
+          <div class="p-4 flex items-center justify-between hover:bg-gray-50 transition">
+             <div class="flex items-center gap-3">
+               <div class="p-2 rounded-full text-white shrink-0" style="background-color: ${cat.color}">
+                 <i data-lucide="${cat.icon}" class="w-4 h-4"></i>
+               </div>
+               <div>
+                 <div class="font-bold text-slate-700">${t.memo || t.category}</div>
+                 <div class="text-xs text-gray-400 flex items-center gap-1">
+                   ${t.date.split('-').slice(1).join('/')} 
+                   <span class="w-1 h-1 bg-gray-300 rounded-full"></span> 
+                   <span class="${isPara ? 'text-teal-500' : 'text-red-500'} font-bold">
+                     ${t.payer}
+                   </span>
+                 </div>
+               </div>
+             </div>
+             <div class="flex items-center gap-2">
+               <div class="font-bold text-slate-800 text-right mr-2">¥${Number(t.amount).toLocaleString()}</div>
+               <button onclick="triggerHaptic(); editItem('${t.id}')" class="text-gray-300 hover:text-teal-500 p-2 rounded-full hover:bg-teal-50 transition active:scale-95" title="編集">
+                 <i data-lucide="pencil" class="w-4 h-4"></i>
+               </button>
+               <button onclick="triggerHaptic(); copyItem('${t.id}')" class="text-gray-300 hover:text-indigo-500 p-2 rounded-full hover:bg-indigo-50 transition active:scale-95" title="コピーして新規作成">
+                 <i data-lucide="copy" class="w-4 h-4"></i>
+               </button>
+               <button onclick="deleteItem('${t.id}')" class="text-gray-300 hover:text-red-400 p-2 rounded-full hover:bg-red-50 transition active:scale-95" title="削除">
+                 <i data-lucide="trash-2" class="w-4 h-4"></i>
+               </button>
+             </div>
+           </div>
+        `;
+      }).join('');
+      lucide.createIcons();
+    }
+
+    function renderCalendar() {
+      const grid = document.getElementById('calendarGrid');
+      grid.innerHTML = '';
+      
+      const [yearStr, monthStr] = currentAccountingMonth.split('-');
+      const year = parseInt(yearStr);
+      const month = parseInt(monthStr);
+      
+      const startDate = new Date(year, month - 2, 26);
+      const endDate = new Date(year, month - 1, 25);
+      
+      const dayTotals = {};
+      currentTransactions.forEach(t => {
+        const d = t.date;
+        dayTotals[d] = (dayTotals[d] || 0) + Number(t.amount);
+      });
+
+      const firstDayOfWeek = startDate.getDay();
+      
+      for (let i = 0; i < firstDayOfWeek; i++) {
+        const emptyCell = document.createElement('div');
+        emptyCell.className = 'calendar-day border-transparent bg-transparent';
+        grid.appendChild(emptyCell);
+      }
+
+      const loopDate = new Date(startDate);
+      while (loopDate <= endDate) {
+        const dateStr = loopDate.toISOString().split('T')[0];
+        const dayNum = loopDate.getDate();
+        const total = dayTotals[dateStr] || 0;
+        
+        const cell = document.createElement('div');
+        cell.className = `calendar-day ${total > 0 ? 'has-expense' : ''}`;
+        // Add click event for detail modal
+        cell.setAttribute('onclick', `triggerHaptic(); openDayDetail('${dateStr}')`);
+        
+        if (dateStr === new Date().toISOString().split('T')[0]) cell.classList.add('today');
+        
+        let html = `<div class="day-num">${dayNum}</div>`;
+        if (total > 0) {
+          html += `<div class="day-total">¥${total.toLocaleString()}</div>`;
+        }
+        cell.innerHTML = html;
+        grid.appendChild(cell);
+        
+        loopDate.setDate(loopDate.getDate() + 1);
+      }
+    }
+
+    function updateCharts(para, rina, catObj) {
+      // Common Options for Percent Labels
+      const datalabelsConfig = {
+        color: '#fff',
+        font: { weight: 'bold', size: 10 },
+        formatter: (value, ctx) => {
+          let sum = 0;
+          let dataArr = ctx.chart.data.datasets[0].data;
+          dataArr.map(data => { sum += data; });
+          let percentage = (value * 100 / sum).toFixed(0) + "%";
+          return percentage === "0%" ? "" : percentage; // Hide 0%
+        },
+        display: (context) => {
+          return context.dataset.data[context.dataIndex] > 0; // Hide 0 values
+        }
+      };
+
+      const ctxP = document.getElementById('payerChart');
+      if (payerChart) payerChart.destroy();
+      
+      if (!(para === 0 && rina === 0)) {
+        payerChart = new Chart(ctxP, {
+          type: 'doughnut',
+          data: {
+            labels: ['ぱら', 'りな'],
+            datasets: [{
+              data: [para, rina],
+              backgroundColor: ['#4ecdc4', '#ff6b6b'],
+              borderWidth: 0
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { 
+              legend: { position: 'right' },
+              datalabels: datalabelsConfig
+            }
+          }
+        });
+      }
+
+      const ctxC = document.getElementById('categoryChart');
+      if (categoryChart) categoryChart.destroy();
+      
+      const labels = Object.keys(catObj);
+      const data = Object.values(catObj);
+      const colors = labels.map(l => (CATEGORIES.find(c => c.id === l) || {}).color || '#ccc');
+
+      if (data.length > 0) {
+        categoryChart = new Chart(ctxC, {
+          type: 'pie',
+          data: {
+            labels: labels,
+            datasets: [{
+              data: data,
+              backgroundColor: colors,
+              borderWidth: 0
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { 
+              legend: { position: 'right', labels: { boxWidth: 12, font: { size: 10 } } },
+              datalabels: datalabelsConfig
+            },
+            onClick: (e) => {
+              // Also allow clicking chart segments to toggle rent (optional UX boost)
+              toggleRentInclusion();
+            }
+          }
+        });
+      }
+    }
+  </script>
+</body>
+</html>
